@@ -1,17 +1,5 @@
 /*****************************************************************************
- * WARNING
- *
- * THIS CODE IS CREATED FOR EXPERIMENTATION AND EDUCATIONAL USE ONLY. 
- * 
- * USAGE OF THIS CODE IN OTHER WAYS MAY INFRINGE UPON THE INTELLECTUAL 
- * PROPERTY OF OTHER PARTIES, SUCH AS INSIDE SECURE AND HID GLOBAL, 
- * AND MAY EXPOSE YOU TO AN INFRINGEMENT ACTION FROM THOSE PARTIES. 
- * 
- * THIS CODE SHOULD NEVER BE USED TO INFRINGE PATENTS OR INTELLECTUAL PROPERTY RIGHTS. 
- *
- *****************************************************************************
- *
- * This file is part of loclass. It is a reconstructon of the cipher engine
+ * This file is part of iClassCipher. It is a reconstructon of the cipher engine
  * used in iClass, and RFID techology.
  *
  * The implementation is based on the work performed by
@@ -22,7 +10,7 @@
  *
  * This is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as published
- * by the Free Software Foundation, or, at your option, any later version. 
+ * by the Free Software Foundation.
  *
  * This file is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -30,37 +18,19 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with loclass.  If not, see <http://www.gnu.org/licenses/>.
- * 
- * 
+ * along with IClassCipher.  If not, see <http://www.gnu.org/licenses/>.
  ****************************************************************************/
 
-
-#include "cipher.h"
-#include "cipherutils.h"
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
 #include <stdint.h>
-#ifndef ON_DEVICE
-#include "fileutils.h"
-#endif
+#include "loclass/cipher.h"
+#include "loclass/cipherutils.h"
+#include "loclass/ikeys.h"
 
-
-/**
-* Definition 1 (Cipher state). A cipher state of iClass s is an element of F 40/2
-* consisting of the following four components:
-* 	1. the left register l = (l 0 . . . l 7 ) ∈ F 8/2 ;
-* 	2. the right register r = (r 0 . . . r 7 ) ∈ F 8/2 ;
-* 	3. the top register t = (t 0 . . . t 15 ) ∈ F 16/2 .
-* 	4. the bottom register b = (b 0 . . . b 7 ) ∈ F 8/2 .
-**/
-typedef struct {
-	uint8_t l;
-	uint8_t r;
-	uint8_t b;
-	uint16_t t;
-} State;
+uint8_t keytable[] = { 0,0,0,0,0,0,0,0};
 
 /**
 *	Definition 2. The feedback function for the top register T : F 16/2 → F 2
@@ -113,9 +83,9 @@ uint8_t _select(bool x, bool y, uint8_t r)
 	bool r6 = r >> 1 & 0x1;
 	bool r7 = r & 0x1;
 
-	bool z0 = (r0 & r2) ^ (r1 & !r3) ^ (r2 | r4);
+	bool z0 = (r0 & r2) ^ (r1 & ~r3) ^ (r2 | r4);
 	bool z1 = (r0 | r2) ^ ( r5 | r7) ^ r1 ^ r6 ^ x ^ y;
-	bool z2 = (r3 & !r5) ^ (r4 & r6 ) ^ r7 ^ x;
+	bool z2 = (r3 & ~r5) ^ (r4 & r6 ) ^ r7 ^ x;
 
 	// The three bitz z0.. z1 are packed into a uint8_t:
 	// 00000ZZZ
@@ -190,6 +160,8 @@ void output(uint8_t* k,State s, BitstreamIn* in,  BitstreamOut* out)
 	{
 		return;
 	}
+	//printf("bitsleft %d" , bitsLeft(in));
+	//printf(" %0d", s.r >> 2 & 1);
 	pushBit(out,(s.r >> 2) & 1);
 	//Remove first bit
 	uint8_t x0 = headBit(in);
@@ -218,76 +190,72 @@ void MAC(uint8_t* k, BitstreamIn input, BitstreamOut out)
 	BitstreamIn input_32_zeroes = {zeroes_32,sizeof(zeroes_32)*8,0};
 	State initState = suc(k,init(k),&input);
 	output(k,initState,&input_32_zeroes,&out);
+
 }
 
-void doMAC(uint8_t *cc_nr_p, uint8_t *div_key_p, uint8_t mac[4])
+
+void printarr(char * name, uint8_t* arr, int len)
 {
-	uint8_t cc_nr[13] = { 0 };
-	uint8_t div_key[8];
-	//cc_nr=(uint8_t*)malloc(length+1);
+	int i ;
+	printf("uint8_t %s[] = {", name);
+	for(i =0 ;  i< len ; i++)
+	{
+		printf("0x%02x,",*(arr+i));
+	}
+	printf("};\n");
+}
 
-	memcpy(cc_nr, cc_nr_p, 12);
-	memcpy(div_key, div_key_p, 8);
+int testMAC()
+{
 
-	reverse_arraybytes(cc_nr,12);
-	BitstreamIn bitstream = {cc_nr, 12 * 8, 0};
+	//From the "dismantling.IClass" paper:
+	uint8_t cc_nr[] = {0xFE,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0,0,0,0};
+	// But actually, that must be reversed, it's "on-the-wire" data
+	reverse_arraybytes(cc_nr,sizeof(cc_nr));
+
+	//From the paper
+	uint8_t div_key[] = {0xE0,0x33,0xCA,0x41,0x9A,0xEE,0x43,0xF9};
+	uint8_t correct_MAC[] = {0x1d,0x49,0xC9,0xDA};
+
+	BitstreamIn bitstream = {cc_nr,sizeof(cc_nr) * 8,0};
 	uint8_t dest []= {0,0,0,0,0,0,0,0};
 	BitstreamOut out = { dest, sizeof(dest)*8, 0 };
 	MAC(div_key,bitstream, out);
 	//The output MAC must also be reversed
 	reverse_arraybytes(dest, sizeof(dest));
-	memcpy(mac, dest, 4);
-	//free(cc_nr);
-	return;
-}
 
-void doMAC_N(uint8_t *address_data_p, uint8_t address_data_size, uint8_t *div_key_p, uint8_t mac[4])
-{
-	uint8_t *address_data;
-	uint8_t div_key[8];
-	address_data = (uint8_t*) malloc(address_data_size);
-
-	memcpy(address_data, address_data_p, address_data_size);
-	memcpy(div_key, div_key_p, 8);
-
-	reverse_arraybytes(address_data, address_data_size);
-	BitstreamIn bitstream = {address_data, address_data_size * 8, 0};
-	uint8_t dest []= {0,0,0,0,0,0,0,0};
-	BitstreamOut out = { dest, sizeof(dest)*8, 0 };
-	MAC(div_key, bitstream, out);
-	//The output MAC must also be reversed
-	reverse_arraybytes(dest, sizeof(dest));
-	memcpy(mac, dest, 4);
-	free(address_data);
-	return;
-}
-
-#ifndef ON_DEVICE
-int testMAC()
-{
-	prnlog("[+] Testing MAC calculation...");
-
-	//From the "dismantling.IClass" paper:
-	uint8_t cc_nr[] = {0xFE,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0,0,0,0};
-	//From the paper
-	uint8_t div_key[8] = {0xE0,0x33,0xCA,0x41,0x9A,0xEE,0x43,0xF9};
-	uint8_t correct_MAC[4] = {0x1d,0x49,0xC9,0xDA};
-
-	uint8_t calculated_mac[4] = {0};
-	doMAC(cc_nr,div_key, calculated_mac);
-
-	if(memcmp(calculated_mac, correct_MAC,4) == 0)
+	if(false && memcmp(dest, correct_MAC,4) == 0)
 	{
-		prnlog("[+] MAC calculation OK!");
+		printf("MAC calculation OK!\n");
 
 	}else
 	{
-		prnlog("[+] FAILED: MAC calculation failed:");
-		printarr("    Calculated_MAC", calculated_mac, 4);
-		printarr("    Correct_MAC   ", correct_MAC, 4);
+		printf("MAC calculation failed\n");
+		printarr("Calculated_MAC", dest, 4);
+		printarr("Correct_MAC   ", correct_MAC, 4);
 		return 1;
 	}
-
 	return 0;
 }
-#endif
+
+int calc_iclass_mac(uint8_t *cc_nr_p, int length, uint8_t *div_key_p, uint8_t *mac)
+{
+    uint8_t *cc_nr;
+    uint8_t div_key[8];
+    cc_nr=(uint8_t*)malloc(length+1);
+    memcpy(cc_nr,cc_nr_p,length);
+    memcpy(div_key,div_key_p,8);
+    
+	reverse_arraybytes(cc_nr,length);
+	BitstreamIn bitstream = {cc_nr,length * 8,0};
+	uint8_t dest []= {0,0,0,0,0,0,0,0};
+	BitstreamOut out = { dest, sizeof(dest)*8, 0 };
+	MAC(div_key,bitstream, out);
+	//The output MAC must also be reversed
+	reverse_arraybytes(dest, sizeof(dest));
+	
+	printf("Calculated_MAC\t%02x%02x%02x%02x\n", dest[0],dest[1],dest[2],dest[3]);
+	memcpy(mac,dest,4);
+	free(cc_nr);
+	return 1;
+}
